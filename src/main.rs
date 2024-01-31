@@ -2,21 +2,16 @@
 
 use bracket_lib::prelude::*;
 
-// START: constants
 const SCREEN_WIDTH: i32 = 80;
 const SCREEN_HEIGHT: i32 = 50;
 const FRAME_DURATION: f32 = 75.0;
-// END: constants
 
-// START: player
 struct Player {
     x: i32,
     y: i32,
     velocity: f32,
 }
-// END: player
 
-// START: playerconstructor
 impl Player {
     fn new(x: i32, y: i32) -> Self {
         Player {
@@ -25,32 +20,78 @@ impl Player {
             velocity: 0.0,
         }
     }
-    // END: playerconstructor
 
-    // START: playerrender
-    fn render(&mut self, ctx: &mut BTerm) {
-        ctx.set(0, self.y, YELLOW, BLACK, to_cp437('@'));
-    }
-    // END: playerrender
-
-    // START: gravity
     fn gravity_and_move(&mut self) {
+        // Increment gravity
         if self.velocity < 2.0 {
             self.velocity += 0.2;
         }
+
+        // Apply gravity
         self.y += self.velocity as i32;
-        self.x += 1;
         if self.y < 0 {
             self.y = 0;
         }
-    }
-    // END: gravity
 
-    // START: flap
+        // Move the player
+        self.x += 1;
+    }
+
     fn flap(&mut self) {
         self.velocity = -2.0;
     }
-    // END: flap
+
+    fn render(&mut self, ctx: &mut BTerm) {
+        ctx.set(0, self.y, YELLOW, BLACK, to_cp437('@'));
+    }
+}
+
+// START: obstacle
+struct Obstacle {
+    x: i32,
+    gap_y: i32,
+    size: i32,
+}
+// END: obstacle
+
+// START: constructor
+impl Obstacle {
+    fn new(x: i32, score: i32) -> Self {
+        let mut random = RandomNumberGenerator::new();
+        Obstacle {
+            x,
+            gap_y: random.range(10, 40),
+            size: i32::max(2, 20 - score),
+        }
+    }
+    // END: constructor
+
+    // START: render
+    fn render(&mut self, ctx: &mut BTerm, player_x: i32) {
+        let screen_x = self.x - player_x;
+        let half_size = self.size / 2;
+
+        // Draw the top half of the obstacle
+        for y in 0..self.gap_y - half_size {
+            ctx.set(screen_x, y, RED, BLACK, to_cp437('|'));
+        }
+
+        // Draw the bottom half of the obstacle
+        for y in self.gap_y + half_size..SCREEN_HEIGHT {
+            ctx.set(screen_x, y, RED, BLACK, to_cp437('|'));
+        }
+    }
+    // END: render
+
+    // START: hit
+    fn hit_obstacle(&self, player: &Player) -> bool {
+        let half_size = self.size / 2;
+        let does_x_match = player.x == self.x; // <callout id="co.flappy.x_match" />
+        let player_above_gap = player.y < self.gap_y - half_size; // <callout id="co.flappy.above_gap" />
+        let player_below_gap = player.y > self.gap_y + half_size;
+        does_x_match && (player_above_gap || player_below_gap) // <callout id="co.flappy.combined" />
+    }
+    // END: hit
 }
 
 enum GameMode {
@@ -63,7 +104,9 @@ enum GameMode {
 struct State {
     player: Player,
     frame_time: f32,
+    obstacle: Obstacle,
     mode: GameMode,
+    score: i32,
 }
 
 impl State {
@@ -71,7 +114,9 @@ impl State {
         State {
             player: Player::new(5, 25),
             frame_time: 0.0,
+            obstacle: Obstacle::new(SCREEN_WIDTH, 0),
             mode: GameMode::Menu,
+            score: 0,
         }
     }
     // END: state
@@ -80,7 +125,9 @@ impl State {
     fn restart(&mut self) {
         self.player = Player::new(5, 25);
         self.frame_time = 0.0;
+        self.obstacle = Obstacle::new(SCREEN_WIDTH, 0);
         self.mode = GameMode::Playing;
+        self.score = 0;
     }
     // END: restart
 
@@ -99,9 +146,12 @@ impl State {
         }
     }
 
+    // START: dead
     fn dead(&mut self, ctx: &mut BTerm) {
         ctx.cls();
         ctx.print_centered(5, "You are dead!");
+        ctx.print_centered(6, &format!("You earned {} points", self.score));
+        // END: dead
         ctx.print_centered(8, "(P) Play Again");
         ctx.print_centered(9, "(Q) Quit Game");
 
@@ -114,7 +164,6 @@ impl State {
         }
     }
 
-    // START: play
     fn play(&mut self, ctx: &mut BTerm) {
         ctx.cls_bg(NAVY);
         self.frame_time += ctx.frame_time_ms;
@@ -127,12 +176,21 @@ impl State {
             self.player.flap();
         }
         self.player.render(ctx);
+        // START: play
         ctx.print(0, 0, "Press SPACE to flap.");
-        if self.player.y > SCREEN_HEIGHT {
+        ctx.print(0, 1, &format!("Score: {}", self.score)); // <callout id="co.flappy.printscore" />
+
+        self.obstacle.render(ctx, self.player.x); // <callout id="co.flappy.obstaclerender" />
+        if self.player.x > self.obstacle.x {
+            // <callout id="co.flappy.scoreup" />
+            self.score += 1;
+            self.obstacle = Obstacle::new(self.player.x + SCREEN_WIDTH, self.score);
+        }
+        if self.player.y > SCREEN_HEIGHT || self.obstacle.hit_obstacle(&self.player) {
             self.mode = GameMode::End;
         }
+        // END: play
     }
-    // END: play
 }
 
 impl GameState for State {
@@ -142,44 +200,6 @@ impl GameState for State {
             GameMode::End => self.dead(ctx),
             GameMode::Playing => self.play(ctx),
         }
-    }
-}
-
-struct Obstacle {
-    x: i32,
-    gap_y: i32,
-    size: i32,
-}
-
-impl Obstacle {
-    fn new(x: i32, score: i32) -> Self {
-        let mut random = RandomNumberGenerator::new();
-        Obstacle {
-            x,
-            gap_y: random.range(10, 40),
-            size: i32::max(2, 20 - score),
-        }
-    }
-
-    fn render(&mut self, ctx: &mut BTerm, player_x: i32) {
-        let screen_x = self.x - player_x;
-        let half_size = self.size / 2;
-        // Draw the top half of the obstacle
-        for y in 0..self.gap_y - half_size {
-            ctx.set(screen_x, y, RED, BLACK, to_cp437('|'));
-        }
-        // Draw the bottom half of the obstacle
-        for y in self.gap_y + half_size..SCREEN_HEIGHT {
-            ctx.set(screen_x, y, RED, BLACK, to_cp437('|'));
-        }
-    }
-
-    fn hit_obstacle(&self, player: &Player) -> bool {
-        let half_size = self.size / 2;
-        let does_x_match = player.x == self.x;
-        let player_above_gap = player.y < self.gap_y - half_size;
-        let player_below_gap = player.y > self.gap_y + half_size;
-        does_x_match && (player_above_gap || player_below_gap)
     }
 }
 
